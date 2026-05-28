@@ -41,18 +41,18 @@ def buscar_negocios(cidade: str, categoria: str, raio_metros: int = 5000) -> lis
             "location": f"{lat},{lng}",
             "radius": raio_metros,
             "keyword": categoria,
-            "key": API_KEY,
+            "key": _KEY,
             "language": "pt-BR",
         }
 
         if next_page_token:
-            params = {"pagetoken": next_page_token, "key": API_KEY}
+            params = {"pagetoken": next_page_token, "key": _KEY}
             time.sleep(2)  # Google exige pausa antes de usar next_page_token
 
         resp = requests.get(f"{BASE_URL}/nearbysearch/json", params=params).json()
 
         if resp.get("status") not in ("OK", "ZERO_RESULTS"):
-            print(f"⚠️  Erro da API: {resp.get('status')} — {resp.get('error_message', '')}")
+            print(f"⚠️  Erro da : {resp.get('status')} — {resp.get('error_message', '')}")
             break
 
         for place in resp.get("results", []):
@@ -83,7 +83,7 @@ def enriquecer_detalhes(place_id: str) -> dict:
     params = {
         "place_id": place_id,
         "fields": "formatted_phone_number,website,url",
-        "key": API_KEY,
+        "key": _KEY,
         "language": "pt-BR",
     }
     resp = requests.get(f"{BASE_URL}/details/json", params=params).json()
@@ -130,8 +130,8 @@ def main():
     print("   Buscador de Negócios — Google Maps")
     print("=" * 50)
 
-    if not API_KEY:
-        print("❌ Chave da API não encontrada. Crie um arquivo .env com GOOGLE_API_KEY=sua_chave")
+    if not _KEY:
+        print("❌ Chave da API não encontrada. Crie um arquivo .env com GOOGLE_API_KEY=AIzaSyAf-1MphXMlDaRCJsSyVAKWmvo-jvmJDT4")
         return
 
     cidade = input("\nCidade (ex: Brasília, DF): ").strip()
