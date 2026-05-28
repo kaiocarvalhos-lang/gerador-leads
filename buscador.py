@@ -29,7 +29,7 @@ with col3:
 buscar = st.button("🔍 Buscar e enriquecer leads", use_container_width=True, type="primary")
 
 
-# ─── Google Places API (New) ──────────────────────────────────────────────────
+# ─── Google Places ────────────────────────────────────────────────────────────
 
 def get_coords(cidade, api_key):
     resp = requests.get(
@@ -46,85 +46,69 @@ def buscar_places(cidade, categoria, raio_metros, api_key):
     headers = {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": api_key,
-        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.id,places.googleMapsUri,nextPageToken"
+        "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.nationalPhoneNumber,places.websiteUri,places.id,places.googleMapsUri"
     }
+    coords = get_coords(cidade, api_key)
     resultados = []
-    next_page_token = None
 
-    for _ in range(3):
-        body = {
-            "textQuery": f"{categoria} em {cidade}",
-            "languageCode": "pt-BR",
-            "maxResultCount": 20,
-            "locationBias": {
-                "circle": {
-                    "center": get_coords(cidade, api_key),
-                    "radius": float(raio_metros)
-                }
-            }
+    body = {
+        "textQuery": f"{categoria} em {cidade}",
+        "languageCode": "pt-BR",
+        "maxResultCount": 20,
+        "locationBias": {
+            "circle": {"center": coords, "radius": float(raio_metros)}
         }
-        if next_page_token:
-            body["pageToken"] = next_page_token
+    }
 
-        resp = requests.post(
-            "https://places.googleapis.com/v1/places:searchText",
-            headers=headers, json=body
-        ).json()
+    resp = requests.post(
+        "https://places.googleapis.com/v1/places:searchText",
+        headers=headers, json=body
+    ).json()
 
-        if "error" in resp:
-            st.error(f"❌ Erro Google Places: {resp['error'].get('message', '')}")
-            break
+    if "error" in resp:
+        st.error(f"❌ Erro Google Places: {resp['error'].get('message', '')}")
+        return []
 
-        for place in resp.get("places", []):
-            resultados.append({
-                "place_id": place.get("id", ""),
-                "Nome": place.get("displayName", {}).get("text", ""),
-                "Endereço": place.get("formattedAddress", ""),
-                "Telefone": place.get("nationalPhoneNumber", ""),
-                "Site": place.get("websiteUri", ""),
-            })
-
-        next_page_token = resp.get("nextPageToken")
-        if not next_page_token:
-            break
-        time.sleep(1)
+    for place in resp.get("places", []):
+        resultados.append({
+            "Nome": place.get("displayName", {}).get("text", ""),
+            "Endereço": place.get("formattedAddress", ""),
+            "Telefone": place.get("nationalPhoneNumber", ""),
+            "Site": place.get("websiteUri", ""),
+        })
 
     return resultados
 
 
-# ─── CNPJ + Proprietário ──────────────────────────────────────────────────────
-
-def limpar_nome(nome):
-    for s in [" LTDA", " ME", " EPP", " EIRELI", " S/A", " SA"]:
-        nome = nome.upper().replace(s, "")
-    return nome.strip()
-
+# ─── CNPJ via CNPJA (API pública, sem bloqueio) ───────────────────────────────
 
 def buscar_cnpj(nome, municipio):
-    # Tenta ReceitaWS
+    """Busca CNPJ via API pública CNPJA."""
     try:
-        query = urllib.parse.quote(limpar_nome(nome))
-        mun = urllib.parse.quote(municipio.upper())
+        query = urllib.parse.quote(nome)
+        mun = urllib.parse.quote(municipio)
         resp = requests.get(
-            f"https://receitaws.com.br/v1/search?query={query}&municipio={mun}",
+            f"https://api.cnpja.com/office/search?company={query}&municipality={mun}&limit=1",
             timeout=10,
             headers={"User-Agent": "Mozilla/5.0"}
         ).json()
-        empresas = resp.get("empresas", [])
-        if empresas:
-            return empresas[0].get("cnpj", "")
+        offices = resp.get("offices", [])
+        if offices:
+            cnpj = offices[0].get("taxId", "")
+            return re.sub(r'\D', '', cnpj)
     except Exception:
         pass
 
-    # Fallback: BrasilAPI
+    # Fallback: busca na BrasilAPI por nome
     try:
-        query = urllib.parse.quote(limpar_nome(nome))
+        query = urllib.parse.quote(nome[:30])
         resp = requests.get(
-            f"https://brasilapi.com.br/api/cnpj/v1/search?query={query}&municipio={urllib.parse.quote(municipio)}",
+            f"https://brasilapi.com.br/api/cnpj/v1/search?query={query}&municipio={urllib.parse.quote(municipio)}&limit=1",
             timeout=10
         ).json()
         if isinstance(resp, list) and resp:
-            return resp[0].get("cnpj", "")
+            cnpj = resp[0].get("cnpj", "")
+            return re.sub(r'\D', '', cnpj)
     except Exception:
         pass
 
@@ -132,6 +116,7 @@ def buscar_cnpj(nome, municipio):
 
 
 def buscar_socio(cnpj):
+    """Busca sócio/proprietário pelo CNPJ."""
     if not cnpj:
         return ""
     try:
@@ -144,9 +129,9 @@ def buscar_socio(cnpj):
         for s in socios:
             qual = s.get("qualificacao_socio", "").upper()
             if "ADMIN" in qual or "SÓCIO" in qual or "SOCIO" in qual:
-                return s.get("nome_socio", "")
+                return s.get("nome_socio", "").title()
         if socios:
-            return socios[0].get("nome_socio", "")
+            return socios[0].get("nome_socio", "").title()
     except Exception:
         pass
     return ""
@@ -188,7 +173,7 @@ if buscar:
         if not places:
             st.error("Nenhum resultado encontrado.")
         else:
-            st.info(f"✅ {len(places)} negócios encontrados. Enriquecendo com CNPJ e proprietário...")
+            st.info(f"✅ {len(places)} negócios encontrados. Buscando CNPJ e proprietário...")
 
             progress = st.progress(0)
             status = st.empty()
@@ -199,7 +184,7 @@ if buscar:
                 status.text(f"🔄 {i+1}/{len(places)}: {nome}")
 
                 cnpj = buscar_cnpj(nome, municipio)
-                time.sleep(0.5)
+                time.sleep(0.4)
                 proprietario = buscar_socio(cnpj)
                 time.sleep(0.3)
                 instagram = buscar_instagram(nome, municipio)
@@ -208,7 +193,7 @@ if buscar:
                 resultados.append({
                     "Nome da Empresa": nome,
                     "Proprietário": proprietario,
-                    "CNPJ": re.sub(r'\D', '', cnpj) if cnpj else "",
+                    "CNPJ": cnpj,
                     "Instagram": instagram,
                     "Site": place.get("Site", ""),
                     "Localização": place.get("Endereço", ""),
