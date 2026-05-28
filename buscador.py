@@ -13,6 +13,8 @@ st.caption("Busca negócios e enriquece com CNPJ, proprietário e Instagram auto
 API_KEY = st.secrets.get("GOOGLE_API_KEY", "") if hasattr(st, "secrets") else ""
 if not API_KEY:
     API_KEY = st.text_input("🔑 Chave da Google Places API", type="password", placeholder="AIzaSy...")
+else:
+    st.success(f"✅ Chave carregada do Secret ({API_KEY[:8]}...)")
 
 st.divider()
 
@@ -37,6 +39,7 @@ def geocodificar(cidade, api_key):
         params={"address": cidade, "key": api_key}
     ).json()
     if not resp.get("results"):
+        st.error(f"❌ Erro ao localizar cidade: {resp.get('status')} — {resp.get('error_message', 'verifique a chave da API')}")
         return None, None
     loc = resp["results"][0]["geometry"]["location"]
     return loc["lat"], loc["lng"]
