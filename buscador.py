@@ -9,7 +9,10 @@ st.set_page_config(page_title="Gerador de Leads", page_icon="📍", layout="wide
 st.title("📍 Gerador de Leads — Google Maps")
 st.caption("Busca negócios e enriquece com CNPJ, proprietário e Instagram automaticamente")
 
-API_KEY = st.text_input("🔑 Chave da Google Places API", type="password", placeholder="AIzaSy...")
+# Tenta ler do Secrets do Streamlit, senão pede no campo
+API_KEY = st.secrets.get("GOOGLE_API_KEY", "") if hasattr(st, "secrets") else ""
+if not API_KEY:
+    API_KEY = st.text_input("🔑 Chave da Google Places API", type="password", placeholder="AIzaSy...")
 
 st.divider()
 
