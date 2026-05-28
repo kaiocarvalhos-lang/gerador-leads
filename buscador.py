@@ -2,154 +2,137 @@ import os
 import csv
 import time
 import requests
-from datetime import datetime
-from dotenv import load_dotenv
+import streamlit as st
+import pandas as pd
+from io import StringIO
 
-load_dotenv()
+st.set_page_config(page_title="Gerador de Leads", page_icon="📍", layout="centered")
 
-API_KEY = os.getenv("GOOGLE_API_KEY")
+st.title("📍 Gerador de Leads — Google Maps")
+st.caption("Busca negócios por cidade e categoria e exporta em CSV")
+
+# Chave da API
+API_KEY = st.text_input("🔑 Sua chave da Google Places API", type="password", placeholder="AIzaSy...")
+
+st.divider()
+
+col1, col2, col3 = st.columns([2, 2, 1])
+with col1:
+    cidade = st.text_input("Cidade", placeholder="Brasília, DF")
+with col2:
+    categoria = st.text_input("Categoria", placeholder="cafeteria, academia...")
+with col3:
+    raio = st.number_input("Raio (km)", min_value=1, max_value=50, value=5)
+
+enriquecer = st.checkbox("Buscar telefone e website também (mais lento)")
+
+buscar = st.button("🔍 Buscar negócios", use_container_width=True, type="primary")
+
 BASE_URL = "https://maps.googleapis.com/maps/api/place"
 
 
-def buscar_negocios(cidade: str, categoria: str, raio_metros: int = 5000) -> list[dict]:
-    """Busca negócios no Google Places e retorna lista de resultados."""
+def geocodificar(cidade, api_key):
+    resp = requests.get(
+        "https://maps.googleapis.com/maps/api/geocode/json",
+        params={"address": cidade, "key": api_key}
+    ).json()
+    if not resp.get("results"):
+        return None, None
+    loc = resp["results"][0]["geometry"]["location"]
+    return loc["lat"], loc["lng"]
 
-    print(f"\n🔍 Buscando '{categoria}' em '{cidade}' (raio: {raio_metros/1000:.0f}km)...\n")
 
-    # Passo 1: geocodificar a cidade para obter lat/lng
-    geo_url = "https://maps.googleapis.com/maps/api/geocode/json"
-    geo_params = {"address": cidade, "key": API_KEY}
-    geo_resp = requests.get(geo_url, params=geo_params).json()
-
-    if not geo_resp.get("results"):
-        print("❌ Cidade não encontrada. Verifique o nome e tente novamente.")
+def buscar_negocios(cidade, categoria, raio_metros, api_key):
+    lat, lng = geocodificar(cidade, api_key)
+    if not lat:
         return []
 
-    location = geo_resp["results"][0]["geometry"]["location"]
-    lat, lng = location["lat"], location["lng"]
-    print(f"📍 Localização encontrada: {lat}, {lng}")
-
-    # Passo 2: buscar negócios com Nearby Search
     resultados = []
     next_page_token = None
     pagina = 1
 
     while True:
-        print(f"   Buscando página {pagina}...")
-
         params = {
             "location": f"{lat},{lng}",
             "radius": raio_metros,
             "keyword": categoria,
-            "key": _KEY,
+            "key": api_key,
             "language": "pt-BR",
         }
-
         if next_page_token:
-            params = {"pagetoken": next_page_token, "key": _KEY}
-            time.sleep(2)  # Google exige pausa antes de usar next_page_token
+            params = {"pagetoken": next_page_token, "key": api_key}
+            time.sleep(2)
 
         resp = requests.get(f"{BASE_URL}/nearbysearch/json", params=params).json()
 
         if resp.get("status") not in ("OK", "ZERO_RESULTS"):
-            print(f"⚠️  Erro da : {resp.get('status')} — {resp.get('error_message', '')}")
+            st.error(f"Erro da API: {resp.get('status')} — {resp.get('error_message', '')}")
             break
 
         for place in resp.get("results", []):
             resultados.append({
-                "nome": place.get("name", ""),
-                "endereco": place.get("vicinity", ""),
-                "avaliacao": place.get("rating", ""),
-                "total_avaliacoes": place.get("user_ratings_total", ""),
-                "aberto_agora": place.get("opening_hours", {}).get("open_now", ""),
-                "tipos": ", ".join(place.get("types", [])),
+                "Nome": place.get("name", ""),
+                "Endereço": place.get("vicinity", ""),
+                "Avaliação": place.get("rating", ""),
+                "Total avaliações": place.get("user_ratings_total", ""),
+                "Aberto agora": place.get("opening_hours", {}).get("open_now", ""),
+                "Tipos": ", ".join(place.get("types", [])),
                 "place_id": place.get("place_id", ""),
             })
 
         next_page_token = resp.get("next_page_token")
-        if not next_page_token:
+        if not next_page_token or pagina >= 3:
             break
-
         pagina += 1
-        if pagina > 3:  # Google retorna no máximo 3 páginas (60 resultados)
-            break
 
-    print(f"\n✅ {len(resultados)} negócios encontrados.")
     return resultados
 
 
-def enriquecer_detalhes(place_id: str) -> dict:
-    """Busca telefone e website de um negócio pelo place_id."""
-    params = {
-        "place_id": place_id,
-        "fields": "formatted_phone_number,website,url",
-        "key": _KEY,
-        "language": "pt-BR",
-    }
-    resp = requests.get(f"{BASE_URL}/details/json", params=params).json()
+def buscar_detalhes(place_id, api_key):
+    resp = requests.get(
+        f"{BASE_URL}/details/json",
+        params={"place_id": place_id, "fields": "formatted_phone_number,website,url", "key": api_key, "language": "pt-BR"}
+    ).json()
     result = resp.get("result", {})
     return {
-        "telefone": result.get("formatted_phone_number", ""),
-        "website": result.get("website", ""),
-        "maps_url": result.get("url", ""),
+        "Telefone": result.get("formatted_phone_number", ""),
+        "Website": result.get("website", ""),
+        "Link Maps": result.get("url", ""),
     }
 
 
-def exportar_csv(resultados: list[dict], cidade: str, categoria: str, enriquecer: bool = False) -> str:
-    """Exporta os resultados para CSV e retorna o nome do arquivo."""
-
-    if enriquecer:
-        print("\n📞 Buscando telefone e website (pode demorar um pouco)...")
-        for i, r in enumerate(resultados):
-            detalhes = enriquecer_detalhes(r["place_id"])
-            r.update(detalhes)
-            print(f"   {i+1}/{len(resultados)} — {r['nome']}")
-            time.sleep(0.2)  # respeita rate limit
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    cidade_slug = cidade.replace(" ", "_").replace(",", "").lower()
-    categoria_slug = categoria.replace(" ", "_").lower()
-    nome_arquivo = f"negocios_{categoria_slug}_{cidade_slug}_{timestamp}.csv"
-
-    campos = ["nome", "endereco", "avaliacao", "total_avaliacoes", "aberto_agora", "tipos"]
-    if enriquecer:
-        campos += ["telefone", "website", "maps_url"]
-    campos.append("place_id")
-
-    with open(nome_arquivo, "w", newline="", encoding="utf-8-sig") as f:
-        writer = csv.DictWriter(f, fieldnames=campos, extrasaction="ignore")
-        writer.writeheader()
-        writer.writerows(resultados)
-
-    print(f"\n💾 Arquivo salvo: {nome_arquivo}")
-    return nome_arquivo
-
-
-def main():
-    print("=" * 50)
-    print("   Buscador de Negócios — Google Maps")
-    print("=" * 50)
-
-    if not _KEY:
-        print("❌ Chave da API não encontrada. Crie um arquivo .env com GOOGLE_API_KEY=AIzaSyAf-1MphXMlDaRCJsSyVAKWmvo-jvmJDT4")
-        return
-
-    cidade = input("\nCidade (ex: Brasília, DF): ").strip()
-    categoria = input("Categoria (ex: cafeteria, farmácia, academia): ").strip()
-    raio_input = input("Raio de busca em km (padrão: 5): ").strip()
-    raio = int(float(raio_input) * 1000) if raio_input else 5000
-
-    enriquecer_input = input("Buscar telefone e website também? (s/n, padrão: n): ").strip().lower()
-    enriquecer = enriquecer_input == "s"
-
-    resultados = buscar_negocios(cidade, categoria, raio)
-
-    if resultados:
-        arquivo = exportar_csv(resultados, cidade, categoria, enriquecer)
-        print(f"\n🎉 Pronto! Abra o arquivo '{arquivo}' no Excel ou Google Sheets.")
+if buscar:
+    if not API_KEY:
+        st.warning("Insira sua chave da Google Places API.")
+    elif not cidade or not categoria:
+        st.warning("Preencha cidade e categoria.")
     else:
-        print("\nNenhum resultado para exportar.")
+        with st.spinner(f"Buscando '{categoria}' em '{cidade}'..."):
+            resultados = buscar_negocios(cidade, categoria, raio * 1000, API_KEY)
 
+        if not resultados:
+            st.error("Nenhum resultado encontrado. Verifique a cidade e categoria.")
+        else:
+            if enriquecer:
+                progress = st.progress(0, text="Buscando detalhes...")
+                for i, r in enumerate(resultados):
+                    detalhes = buscar_detalhes(r["place_id"], API_KEY)
+                    r.update(detalhes)
+                    time.sleep(0.2)
+                    progress.progress((i + 1) / len(resultados), text=f"{i+1}/{len(resultados)} — {r['Nome']}")
+                progress.empty()
 
-if __name__ == "__main__":
-    main()
+            # Remove place_id da exibição
+            df = pd.DataFrame(resultados).drop(columns=["place_id"])
+
+            st.success(f"✅ {len(resultados)} negócios encontrados!")
+            st.dataframe(df, use_container_width=True)
+
+            csv_data = df.to_csv(index=False).encode("utf-8-sig")
+            st.download_button(
+                label="⬇️ Baixar CSV",
+                data=csv_data,
+                file_name=f"leads_{categoria}_{cidade}.csv".replace(" ", "_").replace(",", ""),
+                mime="text/csv",
+                use_container_width=True,
+            )
